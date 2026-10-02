@@ -1,0 +1,965 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<!--
+  ==========================================================================
+  贪吃蛇 · 单文件版
+  --------------------------------------------------------------------------
+  纯 HTML + CSS + JavaScript 实现，不依赖任何外部库或网络资源，
+  直接用浏览器打开本文件即可游玩。
+
+  操作说明：
+    ↑ ↓ ← →（或 W A S D）   控制蛇的移动方向
+    空格                     暂停 / 继续游戏
+    空格 或 回车              游戏结束后重新开始
+
+  自动演示：
+    点击画布下方的「自动演示」开关即可开启。开启后方向键失效，
+    改由代码每隔 100 毫秒计算一次方向，自动把蛇开向食物。
+    空格 / 回车 仍然有效，方便随时暂停或重开。
+
+  规则：
+    吃到食物 加 1 分，蛇身变长，速度略微提升；
+    撞到墙壁 或 撞到自己 则游戏结束。
+  ==========================================================================
+-->
+<!-- 视口设置：在手机上按设备宽度渲染，不做缩放 -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>贪吃蛇</title>
+<style>
+  /* ======================== 全局重置 ======================== */
+
+  /* 让 padding 和 border 计入元素宽高，避免布局被撑破 */
+  * { box-sizing: border-box; }
+
+  /* html/body 撑满整个视口高度，便于后续用 flex 做垂直居中 */
+  html, body {
+    height: 100%;
+    margin: 0;
+  }
+
+  /* 页面主体：深色背景，内容整体居中 */
+  body {
+    display: flex;                 /* 弹性布局 */
+    flex-direction: column;        /* 纵向排列：计分板 → 棋盘 → 底部说明 */
+    align-items: center;           /* 水平居中 */
+    justify-content: center;       /* 垂直居中 */
+    gap: 16px;                     /* 各区块之间的间距 */
+    background: #12161f;           /* 页面底色（深蓝黑） */
+    color: #e8edf7;                /* 默认文字颜色（浅灰白） */
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    user-select: none;             /* 禁止选中文字，避免连按方向键时选中页面内容 */
+    -webkit-tap-highlight-color: transparent;   /* 移动端点击时不出现半透明高亮块 */
+  }
+
+  /* ======================== 顶部计分板 ======================== */
+
+  .hud {
+    display: flex;                 /* 左右两端对齐 */
+    align-items: center;
+    justify-content: space-between;
+    width: 480px;                  /* 与画布同宽 */
+    max-width: 92vw;               /* 窄屏时自适应收缩 */
+    padding: 10px 16px;
+    background: #1b2130;           /* 卡片底色 */
+    border: 1px solid #2b3448;     /* 细边框 */
+    border-radius: 12px;
+  }
+
+  /* “分数”两个小字标签 */
+  .hud .label {
+    font-size: 13px;
+    letter-spacing: 2px;           /* 字间距拉开一点，更像标签 */
+    color: #7d8aa5;                /* 次要文字：暗灰蓝 */
+    text-transform: uppercase;
+  }
+
+  /* 当前分数的大号数字 */
+  .hud .score {
+    font-size: 24px;
+    font-weight: 700;
+    color: #6ee7a8;                /* 亮绿色，与蛇的颜色呼应 */
+    font-variant-numeric: tabular-nums;   /* 等宽数字，跳动时不会左右抖动 */
+  }
+
+  /* 右上角的最高分文字 */
+  .hud .best {
+    font-size: 13px;
+    color: #7d8aa5;
+  }
+
+  /* 最高分里的数字，用金色突出 */
+  .hud .best span {
+    color: #ffd166;
+    font-weight: 600;
+  }
+
+  /* ======================== 棋盘舞台 ======================== */
+
+  /* 包裹画布和覆盖层，作为它们的定位参照与圆角裁剪容器 */
+  .stage {
+    position: relative;            /* 让内部的 .overlay 能以它为基准做绝对定位 */
+    line-height: 0;                /* 消除 inline 元素底部的多余行高间隙 */
+    border-radius: 12px;
+    overflow: hidden;              /* 配合圆角裁掉画布的四角 */
+    box-shadow: 0 18px 40px rgba(0, 0, 0, .45);   /* 悬浮投影，增加层次感 */
+  }
+
+  /* 游戏画布本体 */
+  canvas {
+    display: block;                /* 去掉 inline 元素默认的基线间隙 */
+    background: #0d111a;           /* 比页面更深的底色（配合棋盘格绘制） */
+    width: 480px;                  /* CSS 显示宽度 */
+    max-width: 92vw;               /* 窄屏自适应 */
+    height: auto;                  /* 高度按 1:1 比例自动跟随 */
+    touch-action: none;            /* 触屏上禁用默认滚动/缩放手势，便于识别滑动 */
+  }
+
+  /* ======================== 覆盖提示层 ======================== */
+
+  /* 盖在画布上的半透明提示层：开始 / 暂停 / 游戏结束都用它 */
+  .overlay {
+    position: absolute;            /* 相对 .stage 铺满整个棋盘 */
+    inset: 0;                      /* 等价于 top/right/bottom/left 全为 0 */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 20px;
+    text-align: center;
+    background: rgba(9, 12, 18, .82);   /* 半透明黑，隐约能看到后面的棋盘 */
+    line-height: 1.5;              /* 覆盖 .stage 的 line-height: 0，让文字正常换行 */
+    backdrop-filter: blur(2px);    /* 背景轻微模糊，突出前景文字 */
+  }
+
+  /* 覆盖层隐藏时用 [hidden] 属性控制，这里保证它真的不显示 */
+  .overlay[hidden] { display: none; }
+
+  /* 覆盖层大标题（游戏结束 / 通关）默认红色 */
+  .overlay .title {
+    margin: 0;
+    font-size: 30px;
+    letter-spacing: 2px;
+    color: #ff6b81;
+  }
+
+  /* 加 .ready 类时标题变绿：用于“开始”“已暂停”这类非失败状态 */
+  .overlay .title.ready { color: #6ee7a8; }
+
+  /* 覆盖层里的正文明细（本局得分 / 当前得分） */
+  .overlay .final {
+    margin: 0;
+    font-size: 16px;
+    color: #e8edf7;
+  }
+
+  /* 覆盖层底部的操作提示小字 */
+  .overlay .hint {
+    margin: 0;
+    font-size: 13px;
+    color: #97a3bb;
+  }
+
+  /* 键帽样式的按键说明，例如 <kbd>空格</kbd> */
+  kbd {
+    display: inline-block;
+    padding: 1px 7px;
+    border: 1px solid #3a465f;
+    border-bottom-width: 2px;      /* 底边加粗，做出立体按键的感觉 */
+    border-radius: 5px;
+    background: #202839;
+    font-family: inherit;          /* 沿用页面的中文字体 */
+    font-size: 12px;
+    color: #cfd8ea;
+  }
+
+  /* ======================== 底部控制条 ======================== */
+
+  /* 画布下方的一行：左边是自动演示开关，右边是规则说明 */
+  .bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;               /* 窄屏时允许换行，避免挤成一团 */
+    gap: 10px 12px;
+    width: 480px;                  /* 与画布、计分板同宽 */
+    max-width: 92vw;
+  }
+
+  /* 自动演示开关按钮 */
+  .toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 14px;
+    background: #1b2130;           /* 关闭状态：与计分板同色 */
+    color: #97a3bb;                /* 关闭状态：次要文字色 */
+    border: 1px solid #2b3448;
+    border-radius: 999px;          /* 胶囊形状 */
+    font-family: inherit;          /* 沿用页面字体，不用按钮的默认字体 */
+    font-size: 13px;
+    cursor: pointer;
+    transition: background .15s, color .15s, border-color .15s;
+  }
+
+  /* 鼠标悬停时边框稍微提亮 */
+  .toggle:hover { border-color: #3a465f; }
+
+  /* 键盘聚焦时给出可见的焦点环 */
+  .toggle:focus-visible {
+    outline: 2px solid #6ee7a8;
+    outline-offset: 2px;
+  }
+
+  /* 开关上的小圆点指示灯 */
+  .toggle .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #4a5670;           /* 关闭状态：暗灰 */
+    transition: background .15s, box-shadow .15s;
+  }
+
+  /* 开启状态：按钮整体变绿 */
+  .toggle.on {
+    color: #6ee7a8;
+    border-color: #2f6b4d;
+    background: #16281f;
+  }
+
+  /* 开启状态：指示灯发亮 */
+  .toggle.on .dot {
+    background: #6ee7a8;
+    box-shadow: 0 0 8px rgba(110, 231, 168, .9);
+  }
+
+  /* 页面底部的规则说明文字 */
+  .foot {
+    font-size: 12px;
+    color: #64708a;
+  }
+</style>
+</head>
+<body>
+
+  <!-- 顶部计分板：左边是当前分数，右边是历史最高分 -->
+  <div class="hud">
+    <div>
+      <div class="label">分数</div>
+      <!-- 当前分数，由脚本实时更新 -->
+      <div class="score" id="score">0</div>
+    </div>
+    <!-- 最高分保存在 localStorage 中，刷新页面后依然保留 -->
+    <div class="best">最高分 <span id="best">0</span></div>
+  </div>
+
+  <!-- 棋盘舞台：画布 + 覆盖提示层 -->
+  <div class="stage">
+    <!-- 游戏画布。width/height 是内部像素尺寸，脚本会根据高分屏再调整 -->
+    <canvas id="game" width="480" height="480"></canvas>
+
+    <!-- 覆盖层：开始前、暂停时、结束后显示；游戏进行中隐藏 -->
+    <div class="overlay" id="overlay">
+      <h1 class="title ready" id="ovTitle">贪吃蛇</h1>
+      <p class="final" id="ovText">按方向键开始游戏</p>
+      <p class="hint"><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> 移动 · <kbd>空格</kbd> 暂停 / 继续</p>
+    </div>
+  </div>
+
+  <!-- 底部控制条：左边是自动演示开关，右边是规则说明 -->
+  <div class="bar">
+    <!-- 自动演示开关。点击切换；开启后由代码接管方向选择，方向键将被忽略 -->
+    <button type="button" id="autoBtn" class="toggle" aria-pressed="false">
+      <span class="dot"></span><span id="autoLabel">自动演示：关</span>
+    </button>
+    <span class="foot">吃到食物 +1 分 · 撞墙或撞到自己游戏结束</span>
+  </div>
+
+<script>
+// 用立即执行函数把全部逻辑包起来，避免变量泄漏到全局作用域
+(function () {
+  'use strict';                 // 开启严格模式，让拼写错误等问题更早暴露
+
+  // ======================== 配置参数 ========================
+  // 想调整难度或棋盘大小，改这几个数字即可
+  var COLS = 20;              // 横向格子数
+  var ROWS = 20;              // 纵向格子数
+  var CELL = 24;              // 每格像素（仅作为画布尺寸的初始参考值）
+  var START_SPEED = 130;      // 初始每步间隔（毫秒），越小蛇跑得越快
+  var MIN_SPEED = 65;         // 最高速度上限（间隔不会再低于这个值）
+  var SPEED_UP = 4;           // 每吃一个食物，间隔减少的毫秒数
+  var AUTO_INTERVAL = 100;    // 自动演示每隔多少毫秒重新决策一次方向
+
+  // ======================== DOM 元素引用 ========================
+  var canvas = document.getElementById('game');      // 画布
+  var ctx = canvas.getContext('2d');                 // 2D 绘图上下文
+  var scoreEl = document.getElementById('score');    // 当前分数显示区
+  var bestEl = document.getElementById('best');      // 最高分显示区
+  var overlay = document.getElementById('overlay');  // 覆盖提示层
+  var ovTitle = document.getElementById('ovTitle');  // 覆盖层标题
+  var ovText = document.getElementById('ovText');    // 覆盖层正文
+  var autoBtn = document.getElementById('autoBtn');      // 自动演示开关按钮
+  var autoLabel = document.getElementById('autoLabel');  // 开关上的文字
+
+  // ======================== 画布尺寸适配 ========================
+  // 高分屏（devicePixelRatio > 1）下，如果画布内部像素等于 CSS 像素，
+  // 浏览器会把画面放大从而显得发虚。这里把内部像素按比例放大，
+  // 再用 setTransform 把坐标系缩回 CSS 像素，绘制代码就无需关心缩放。
+  // 让画布内部像素与 CSS 显示尺寸保持一致，避免高分屏发虚
+  (function setupCanvas() {
+    var cssW = canvas.clientWidth || COLS * CELL;     // CSS 实际显示宽度
+    var dpr = window.devicePixelRatio || 1;           // 设备像素比，普通屏为 1
+    canvas.width = Math.round(cssW * dpr);            // 内部像素宽
+    canvas.height = Math.round(cssW * dpr);           // 内部像素高（正方形）
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);           // 把坐标系缩放回 CSS 像素
+    ctx.imageSmoothingEnabled = false;                // 关闭平滑，保持色块边缘锐利
+  })();
+  var VIEW = canvas.clientWidth || COLS * CELL;   // CSS 像素下的可视边长
+  var CELL_PX = VIEW / COLS;                      // 实际绘制用的格宽（= VIEW / 20）
+
+  // ======================== 游戏状态 ========================
+  // state 的四种取值：
+  //   'ready'   等待开始（显示开始提示）
+  //   'running' 游戏进行中
+  //   'paused'  已暂停
+  //   'over'    游戏结束
+  var state = 'ready';
+  var snake = [];          // 蛇身格子数组 [{x, y}, ...]，蛇头放在下标 0
+  var dir = { x: 1, y: 0 };   // 当前移动方向，初始向右
+  var queue = [];          // 待生效的方向输入（防止一步内连按两次导致自撞）
+  var food = { x: 0, y: 0 };  // 食物所在的格子坐标
+  var score = 0;           // 本局得分
+  var stepMs = START_SPEED;   // 当前每步间隔（毫秒），吃得越多越小
+  var acc = 0;             // 累积时间，够 stepMs 就走一步
+  var lastTs = 0;          // 上一帧的时间戳，用于计算帧间隔
+  var best = loadBest();   // 历史最高分
+
+  // ---- 自动演示相关状态 ----
+  var AUTO = false;        // 是否开启自动演示（开启后方向键失效）
+  var autoTimer = null;    // 自动演示的定时器句柄，关闭时需要清掉
+
+  bestEl.textContent = best;   // 初始化时先把最高分显示出来
+
+  // ======================== 工具函数 ========================
+
+  // 从 localStorage 读取最高分；隐私模式等场景可能抛异常，所以包一层 try
+  function loadBest() {
+    try {
+      var v = window.localStorage.getItem('snake.best');
+      return v ? (parseInt(v, 10) || 0) : 0;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  // 把最高分写回 localStorage，失败时静默忽略
+  function saveBest(v) {
+    try { window.localStorage.setItem('snake.best', String(v)); } catch (e) { /* 忽略 */ }
+  }
+
+  // 把整局游戏恢复到初始状态（不会自动开始，由调用方决定）
+  function reset() {
+    var midY = Math.floor(ROWS / 2);   // 放在棋盘垂直方向中间那一行
+    // 初始蛇身 3 节，横向排列，蛇头在最右边
+    snake = [
+      { x: 4, y: midY },
+      { x: 3, y: midY },
+      { x: 2, y: midY }
+    ];
+    dir = { x: 1, y: 0 };     // 初始朝右
+    queue = [];               // 清空方向输入队列
+    score = 0;                // 分数归零
+    stepMs = START_SPEED;     // 速度恢复初始值
+    acc = 0;
+    lastTs = 0;
+    scoreEl.textContent = '0';
+    placeFood();              // 随机放一个食物
+    draw();                   // 立刻重绘一次，避免出现空白画面
+  }
+
+  // 在所有空格子中随机挑选一个放置食物
+  function placeFood() {
+    var free = [];
+    // 遍历整个棋盘，收集所有没有被蛇占用的格子
+    for (var y = 0; y < ROWS; y++) {
+      for (var x = 0; x < COLS; x++) {
+        if (!occupied(x, y)) free.push({ x: x, y: y });
+      }
+    }
+    // 一个空格子都没有，说明蛇已经铺满棋盘，判定为通关
+    if (free.length === 0) {   // 通关：铺满整个棋盘
+      gameOver(true);
+      return;
+    }
+    // 从空格子中随机取一个（| 0 相当于取整，比 Math.floor 稍快）
+    food = free[(Math.random() * free.length) | 0];
+  }
+
+  // 判断某个格子是否已经被蛇占用
+  function occupied(x, y) {
+    for (var i = 0; i < snake.length; i++) {
+      if (snake[i].x === x && snake[i].y === y) return true;
+    }
+    return false;
+  }
+
+  // ======================== 核心游戏逻辑 ========================
+
+  // 走一步：处理方向、判定碰撞、移动蛇身、吃食物
+  function step() {
+    // 自动演示开启时，每一步都再决策一次，作为安全兜底。
+    // 原因：提速后一步最短只要 65ms，比 100ms 的决策间隔还短，
+    // 如果一直沿用上一次算出的方向，蛇可能在两次决策之间多走一格直接撞上墙。
+    if (AUTO) autoTick();
+
+    // 取出一个待生效方向；与当前方向相反则忽略。
+    // 这里用队列而不是直接改 dir，是为了让“一步之内连按两个方向”也能被正确判定，
+    // 避免出现一帧内先转上再转下这类反向自杀的情况。
+    while (queue.length) {
+      var d = queue.shift();
+      if (d.x === -dir.x && d.y === -dir.y) continue;   // 不能 180° 掉头
+      if (d.x === dir.x && d.y === dir.y) continue;     // 同方向，跳过
+      dir = d;
+      break;
+    }
+
+    // 按当前方向算出蛇头即将进入的格子
+    var head = { x: snake[0].x + dir.x, y: snake[0].y + dir.y };
+
+    // ---- 碰撞判定 1：撞墙（越界）----
+    // 注意这里直接 return，不把越界的蛇头写进数组，避免渲染出界外的方块
+    // 撞墙
+    if (head.x < 0 || head.x >= COLS || head.y < 0 || head.y >= ROWS) {
+      gameOver(false);
+      return;
+    }
+    // ---- 碰撞判定 2：撞到自己 ----
+    // 只检查到倒数第二节：因为这一帧尾巴会移走，蛇头进入原来的尾格是合法的
+    // 撞到自己（尾巴此刻会移动走，所以最后一节不算）
+    var limit = snake.length - 1;
+    for (var i = 0; i < limit; i++) {
+      if (snake[i].x === head.x && snake[i].y === head.y) {
+        gameOver(false);
+        return;
+      }
+    }
+
+    // 把新蛇头插到数组最前面
+    snake.unshift(head);
+
+    if (head.x === food.x && head.y === food.y) {
+      // ---- 吃到食物 ----
+      score += 1;                                  // 吃到食物 +1 分
+      scoreEl.textContent = String(score);         // 同步更新顶部显示
+      if (score > best) {                          // 刷新最高分
+        best = score;
+        bestEl.textContent = String(best);
+        saveBest(best);
+      }
+      stepMs = Math.max(MIN_SPEED, stepMs - SPEED_UP);   // 提速，但不低于上限
+      placeFood();                                 // 重新放一个食物
+      // 这里不弹出尾巴，所以蛇身长度 +1
+    } else {
+      // ---- 没吃到食物 ----
+      snake.pop();                                 // 弹出尾巴，长度不变，形成“整体前移”的效果
+    }
+  }
+
+  // 结束游戏。win 为 true 表示铺满棋盘通关
+  function gameOver(win) {
+    state = 'over';
+    ovTitle.textContent = win ? '完美通关！' : '游戏结束';
+    ovTitle.className = 'title';                   // 去掉 .ready，标题变红
+    ovText.textContent = '本局得分：' + score + ' 分';
+    document.getElementById('overlay').querySelector('.hint').innerHTML =
+      '按 <kbd>空格</kbd> 或 <kbd>回车</kbd> 重新开始';
+    show(overlay, true);
+    draw();                                        // 再画一帧，把最终局面留在画布上
+  }
+
+  // 显示 / 隐藏覆盖层（借助 hidden 属性配合 CSS 的 .overlay[hidden]）
+  function show(el, on) {
+    if (on) el.removeAttribute('hidden');
+    else el.setAttribute('hidden', '');
+  }
+
+  // 在“运行中”和“已暂停”两种状态之间切换
+  function togglePause() {
+    if (state === 'running') {
+      state = 'paused';
+      ovTitle.textContent = '已暂停';
+      ovTitle.className = 'title ready';           // 用绿色标题，区别于失败提示
+      ovText.textContent = '当前得分：' + score + ' 分';
+      overlay.querySelector('.hint').innerHTML = '按 <kbd>空格</kbd> 继续';
+      show(overlay, true);
+    } else if (state === 'paused') {
+      state = 'running';
+      lastTs = 0;                                  // 重置时间基准，避免恢复瞬间连走好几步
+      show(overlay, false);
+    }
+  }
+
+  // ======================== 画面绘制 ========================
+
+  // 重绘整个画面：棋盘背景 → 食物 → 蛇身 → 蛇眼睛
+  function draw() {
+    ctx.clearRect(0, 0, VIEW, VIEW);               // 先清空上一帧
+
+    // 棋盘格背景：用 (x + y) 的奇偶性交替两种颜色，做出格子质感
+    for (var y = 0; y < ROWS; y++) {
+      for (var x = 0; x < COLS; x++) {
+        ctx.fillStyle = (x + y) % 2 === 0 ? '#111726' : '#0d111a';
+        ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX);
+      }
+    }
+
+    // 食物
+    drawFood(food.x, food.y);
+
+    // 蛇身：从尾巴往头画，这样蛇头会覆盖在最上层
+    for (var i = snake.length - 1; i >= 0; i--) {
+      var isHead = i === 0;
+      var t = i / Math.max(1, snake.length - 1);    // 0 = 头，1 = 尾，用于做颜色渐变
+      // 蛇头用高亮色，蛇身从头到尾由亮绿渐变到深绿
+      ctx.fillStyle = isHead ? '#8affc1' : mix('#3ddc84', '#1f8f56', t);
+      // 每格画一个圆角方块，四周留 2px 缝隙；蛇头的圆角更大一些
+      roundRect(snake[i].x, snake[i].y, Math.max(2, CELL_PX - 2), isHead ? 7 : 5);
+    }
+
+    // 最后画蛇眼睛，让它朝向当前移动方向
+    if (snake.length) {
+      drawEyes(snake[0]);
+    }
+  }
+
+  // 画食物：一个带发光效果的红色小球，左上角有一点高光
+  function drawFood(x, y) {
+    var cx = x * CELL_PX + CELL_PX / 2;            // 该格中心点的 x
+    var cy = y * CELL_PX + CELL_PX / 2;            // 该格中心点的 y
+    var r = CELL_PX * 0.32;                        // 球的半径
+
+    // save/restore 用来隔离阴影设置，避免影响后面的绘制
+    ctx.save();
+    ctx.shadowColor = 'rgba(255, 107, 129, .8)';   // 发光颜色
+    ctx.shadowBlur = CELL_PX * 0.6;                // 发光范围
+    ctx.fillStyle = '#ff6b81';
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);            // 画一个整圆
+    ctx.fill();
+    ctx.restore();
+
+    // 高光点，让球看起来更有立体感
+    ctx.fillStyle = 'rgba(255,255,255,.75)';
+    ctx.beginPath();
+    ctx.arc(cx - r * 0.32, cy - r * 0.36, r * 0.22, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // 画蛇头的两只眼睛，位置根据当前方向摆到头部的“前方”两侧
+  function drawEyes(head) {
+    var pad = CELL_PX * 0.26;                      // 眼睛距离头部边缘的距离
+    var r = Math.max(1.4, CELL_PX * 0.09);         // 眼珠半径，限制最小值以免太小看不见
+    var x0 = head.x * CELL_PX;                     // 该格左上角的 x
+    var y0 = head.y * CELL_PX;                     // 该格左上角的 y
+    var pts;                                       // 两只眼睛的坐标
+
+    if (dir.x !== 0) {
+      // 横向移动：眼睛贴在左边或右边，上下各一只
+      var fx = dir.x > 0 ? x0 + CELL_PX - pad : x0 + pad;
+      pts = [
+        { x: fx, y: y0 + CELL_PX * 0.32 },
+        { x: fx, y: y0 + CELL_PX * 0.68 }
+      ];
+    } else {
+      // 纵向移动：眼睛贴在上边或下边，左右各一只
+      var fy = dir.y > 0 ? y0 + CELL_PX - pad : y0 + pad;
+      pts = [
+        { x: x0 + CELL_PX * 0.32, y: fy },
+        { x: x0 + CELL_PX * 0.68, y: fy }
+      ];
+    }
+
+    ctx.fillStyle = '#0d111a';                     // 眼珠用底色，看起来像镂空
+    for (var i = 0; i < pts.length; i++) {
+      ctx.beginPath();
+      ctx.arc(pts[i].x, pts[i].y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // 以一个格子为单位，画一个居中的圆角方块。
+  // 老浏览器没有 ctx.roundRect，所以这里手写路径
+  function roundRect(gx, gy, size, radius) {
+    var x = gx * CELL_PX + (CELL_PX - size) / 2;   // 居中后的左上角 x
+    var y = gy * CELL_PX + (CELL_PX - size) / 2;   // 居中后的左上角 y
+    var r = Math.min(radius, size / 2);            // 圆角半径不能超过边长的一半
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + size, y, x + size, y + size, r);         // 右上角
+    ctx.arcTo(x + size, y + size, x, y + size, r);         // 右下角
+    ctx.arcTo(x, y + size, x, y, r);                       // 左下角
+    ctx.arcTo(x, y, x + size, y, r);                       // 左上角
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // 把两个十六进制颜色按比例 t（0~1）混合，返回 rgb(...) 字符串，用于蛇身渐变
+  function mix(c1, c2, t) {
+    t = Math.max(0, Math.min(1, t));               // 把 t 限制在 0~1 之间
+    var a = parseInt(c1.slice(1), 16);             // 去掉开头的 '#'，按十六进制解析
+    var b = parseInt(c2.slice(1), 16);
+    var ar = (a >> 16) & 255, ag = (a >> 8) & 255, ab = a & 255;   // 拆出各自的 R/G/B
+    var br = (b >> 16) & 255, bg = (b >> 8) & 255, bb = b & 255;
+    return 'rgb(' +
+      Math.round(ar + (br - ar) * t) + ',' +
+      Math.round(ag + (bg - ag) * t) + ',' +
+      Math.round(ab + (bb - ab) * t) + ')';
+  }
+
+  // ======================== 主循环 ========================
+
+  // requestAnimationFrame 的回调：只负责“计时”，具体走几步由累积时间决定。
+  // 这样能把移动逻辑与屏幕刷新率解耦，60Hz 和 144Hz 显示器上手感一致。
+  function loop(ts) {
+    if (state === 'running') {
+      if (!lastTs) lastTs = ts;                    // 第一帧只记录基准时间
+      var dt = ts - lastTs;                        // 距离上一帧的毫秒数
+      lastTs = ts;
+      if (dt > 250) dt = 250;      // 切换标签页回来后不要“补步”，最多按 250ms 计算
+      acc += dt;                                   // 累加时间
+      // 累积够一个步长就走一步（一帧内可能需要连走多步）
+      while (acc >= stepMs && state === 'running') {
+        acc -= stepMs;
+        step();
+      }
+      if (state === 'running') draw();             // 只有在运行中才重绘
+    } else {
+      lastTs = 0;                                  // 非运行状态清空基准，恢复后重新计时
+    }
+    window.requestAnimationFrame(loop);            // 预约下一帧
+  }
+
+  // ======================== 键盘输入 ========================
+
+  // 方向键与 WASD 的映射表：键名 → 方向向量
+  var KEYS = {
+    ArrowUp:    { x: 0, y: -1 },
+    ArrowDown:  { x: 0, y: 1 },
+    ArrowLeft:  { x: -1, y: 0 },
+    ArrowRight: { x: 1, y: 0 },
+    w: { x: 0, y: -1 }, W: { x: 0, y: -1 },
+    s: { x: 0, y: 1 },  S: { x: 0, y: 1 },
+    a: { x: -1, y: 0 }, A: { x: -1, y: 0 },
+    d: { x: 1, y: 0 },  D: { x: 1, y: 0 }
+  };
+
+  document.addEventListener('keydown', function (e) {
+    var d = KEYS[e.key];
+
+    // ---- 情况一：按下的是方向键 ----
+    if (d) {
+      e.preventDefault();                 // 阻止页面滚动
+      if (AUTO) return;                   // 自动演示中，方向交给代码，忽略玩家的方向输入
+      if (state === 'ready') {
+        // 等待开始时按方向键，直接开局，并让第一步就朝玩家按的方向走
+        state = 'running';
+        lastTs = 0;
+        acc = 0;
+        show(overlay, false);
+        queue.push(d);                    // 第一步就按玩家按的方向走
+      } else if (state === 'running') {
+        // 队列最多缓存 2 个输入，避免狂按方向键堆积过多指令
+        if (queue.length < 2) queue.push(d);
+      }
+      return;
+    }
+
+    // ---- 情况二：按下空格 ----
+    // 注意：暂停 / 重开属于“控制”而不是“方向”，所以自动演示时依然保留，
+    // 否则开启演示后就只能靠鼠标才能暂停或重开了。
+    if (e.key === ' ' || e.key === 'Spacebar' || e.code === 'Space') {
+      e.preventDefault();
+      if (state === 'ready') {
+        // 开始游戏（保持默认的向右方向）
+        state = 'running';
+        lastTs = 0;
+        acc = 0;
+        show(overlay, false);
+      } else if (state === 'over') {
+        restart();                        // 结束后按空格 = 重开一局
+      } else {
+        togglePause();                    // 运行中 / 暂停中按空格 = 切换暂停
+      }
+      return;
+    }
+
+    // ---- 情况三：按下回车 ----
+    if (e.key === 'Enter') {
+      if (state === 'over') {
+        e.preventDefault();
+        restart();
+      } else if (state === 'ready') {
+        e.preventDefault();
+        state = 'running';
+        lastTs = 0;
+        acc = 0;
+        show(overlay, false);
+      }
+    }
+  });
+
+  // 重新开始一局：先复位数据，再直接进入运行状态
+  function restart() {
+    reset();
+    state = 'running';
+    lastTs = 0;
+    acc = 0;
+    ovTitle.className = 'title ready';     // 标题恢复绿色，供下次暂停/开始时复用
+    show(overlay, false);
+  }
+
+  // ======================== 触屏滑动支持 ========================
+
+  var touchStart = null;                   // 记录手指按下时的位置
+
+  canvas.addEventListener('touchstart', function (e) {
+    var t = e.changedTouches[0];
+    touchStart = { x: t.clientX, y: t.clientY };
+  }, { passive: true });                   // passive 表示不阻止默认行为，滚动更流畅
+
+  canvas.addEventListener('touchend', function (e) {
+    if (!touchStart) return;
+    var t = e.changedTouches[0];
+    var dx = t.clientX - touchStart.x;     // 横向位移
+    var dy = t.clientY - touchStart.y;     // 纵向位移
+    touchStart = null;
+    // 位移太小视为点击而不是滑动，直接忽略
+    if (Math.abs(dx) < 20 && Math.abs(dy) < 20) return;
+
+    // 位移较大的那个轴决定滑动方向
+    var d = Math.abs(dx) > Math.abs(dy)
+      ? { x: dx > 0 ? 1 : -1, y: 0 }
+      : { x: 0, y: dy > 0 ? 1 : -1 };
+
+    // 与键盘方向键的处理逻辑保持一致
+    if (AUTO) return;                      // 自动演示中同样忽略触摸滑动
+    if (state === 'ready') {
+      state = 'running';
+      lastTs = 0;
+      acc = 0;
+      show(overlay, false);
+      queue.push(d);
+    } else if (state === 'running') {
+      if (queue.length < 2) queue.push(d);
+    }
+  }, { passive: true });
+
+  // ======================== 自动演示 ========================
+  // 开启后由代码代替玩家决定方向：每隔 AUTO_INTERVAL 毫秒算一次，
+  // 算出来的方向通过和键盘完全相同的 queue 通道交给 step() 执行，
+  // 所以“不能掉头”“一步内只生效一个方向”这些规则对演示同样成立。
+  //
+  // 策略（按优先级）：
+  //   1. 先把四个方向里“走进去不会撞墙、不会撞自己”的挑出来；
+  //   2. 在这些安全方向里，选走完之后离食物曼哈顿距离最近的那个；
+  //   3. 如果最近的那个是死胡同（走完就没地方去了），
+  //      就退而求其次，改选走完之后活动空间最大的安全方向。
+
+  // 四个候选方向：上、右、下、左
+  var AUTO_DIRS = [
+    { x: 0, y: -1 },
+    { x: 1, y: 0 },
+    { x: 0, y: 1 },
+    { x: -1, y: 0 }
+  ];
+
+  // 曼哈顿距离 = 横向格数差 + 纵向格数差，用来衡量某格离食物有多近
+  function manhattan(x, y) {
+    return Math.abs(x - food.x) + Math.abs(y - food.y);
+  }
+
+  // 把一串坐标编码成 { "x,y": true } 形式，便于 O(1) 判断某个格子是否被占用
+  function toKeySet(cells) {
+    var set = {};
+    for (var i = 0; i < cells.length; i++) {
+      set[cells[i].x + ',' + cells[i].y] = true;
+    }
+    return set;
+  }
+
+  // 只做推演，不修改真实的 snake：算出蛇头走到 (nx, ny) 之后的新蛇身
+  function simulateMove(nx, ny) {
+    var grew = (nx === food.x && ny === food.y);   // 这一步会不会吃到食物
+    var body = snake.slice();                      // 复制当前蛇身
+    body.unshift({ x: nx, y: ny });                // 新蛇头放到最前面
+    if (!grew) body.pop();                         // 没吃到，尾巴就往前挪一格
+    return body;
+  }
+
+  // 判断 (nx, ny) 这一步会不会立刻撞墙或撞到自己。
+  // 只检查到倒数第二节：因为这一步尾巴会移开，蛇头进入原来的尾格是合法的。
+  function canMoveInto(nx, ny) {
+    if (nx < 0 || nx >= COLS || ny < 0 || ny >= ROWS) return false;
+    for (var i = 0; i < snake.length - 1; i++) {
+      if (snake[i].x === nx && snake[i].y === ny) return false;
+    }
+    return true;
+  }
+
+  // 洪水填充（flood fill）：从 (sx, sy) 出发，数一数不穿过蛇身能走到多少格。
+  // 用“能走到的格数”来衡量这块空间有多大，用来识别死胡同。
+  function countReachable(sx, sy, blocked) {
+    var seen = {};
+    var stack = [{ x: sx, y: sy }];
+    var count = 0;
+    while (stack.length) {
+      var cur = stack.pop();
+      var key = cur.x + ',' + cur.y;
+      if (seen[key] || blocked[key]) continue;
+      seen[key] = true;
+      count++;
+      // 把四个方向的邻居压入待检查列表
+      for (var i = 0; i < AUTO_DIRS.length; i++) {
+        var nx = cur.x + AUTO_DIRS[i].x;
+        var ny = cur.y + AUTO_DIRS[i].y;
+        if (nx < 0 || nx >= COLS || ny < 0 || ny >= ROWS) continue;
+        var nkey = nx + ',' + ny;
+        if (seen[nkey] || blocked[nkey]) continue;
+        stack.push({ x: nx, y: ny });
+      }
+    }
+    return count;
+  }
+
+  // 假设走到 (nx, ny)，返回走完之后蛇头周围还剩多少活动空间。
+  // freedom 越小说明越容易把自己憋死；length 是新蛇身的长度，用于比较。
+  function freedomAfter(nx, ny) {
+    var body = simulateMove(nx, ny);
+    var blocked = toKeySet(body);
+    delete blocked[nx + ',' + ny];                 // 起点（新蛇头）自己不算障碍
+    return {
+      freedom: countReachable(nx, ny, blocked) - 1,   // 减掉蛇头自己所站的那一格
+      length: body.length
+    };
+  }
+
+  // 挑选下一步方向。返回 null 表示四个方向都不安全（已经必死，保持原方向即可）
+  function chooseAutoDir() {
+    var safe = [];
+
+    // 第一步：筛出所有“走进去不会立刻死”的方向，并顺便算好各项指标
+    for (var i = 0; i < AUTO_DIRS.length; i++) {
+      var d = AUTO_DIRS[i];
+      if (d.x === -dir.x && d.y === -dir.y) continue;   // 不能 180° 掉头
+      var nx = snake[0].x + d.x;
+      var ny = snake[0].y + d.y;
+      if (!canMoveInto(nx, ny)) continue;               // 会撞墙或撞到自己，淘汰
+
+      var space = freedomAfter(nx, ny);
+      safe.push({
+        dir: d,
+        dist: manhattan(nx, ny),                        // 离食物的曼哈顿距离
+        freedom: space.freedom,                         // 走完之后的活动空间
+        // 死胡同：走完无处可去，或者剩下的空间已经装不下蛇身
+        deadEnd: space.freedom === 0 || space.freedom < space.length,
+        // 是否与当前方向相同（距离一样时优先走直线，画面更自然）
+        straight: (d.x === dir.x && d.y === dir.y) ? 0 : 1
+      });
+    }
+
+    if (safe.length === 0) return null;                 // 四面楚歌，无路可走
+
+    // 第二步：按“离食物曼哈顿距离最近”排序，距离相同则优先保持原方向
+    safe.sort(function (a, b) {
+      if (a.dist !== b.dist) return a.dist - b.dist;
+      return a.straight - b.straight;
+    });
+
+    // 第三步：最近的方向如果不是死胡同，就直接采用
+    if (!safe[0].deadEnd) return safe[0].dir;
+
+    // 第四步：最近的方向会把自己堵死 —— 退而求其次，
+    // 在所有安全方向里挑走完之后活动空间最大的（空间一样大就挑离食物近的）
+    var pick = safe[0];
+    for (var j = 1; j < safe.length; j++) {
+      if (safe[j].freedom > pick.freedom ||
+          (safe[j].freedom === pick.freedom && safe[j].dist < pick.dist)) {
+        pick = safe[j];
+      }
+    }
+    return pick.dir;
+  }
+
+  // 定时器回调，相当于自动演示的“大脑”，每隔 AUTO_INTERVAL 毫秒跑一次
+  function autoTick() {
+    if (!AUTO || state !== 'running') return;      // 没开启、或不在游戏中，就不决策
+    var d = chooseAutoDir();
+    if (!d) return;                                // 无路可走，只能维持原方向
+    if (d.x === dir.x && d.y === dir.y) return;    // 与当前方向相同，无需入队
+
+    // 队列里已经排着同一个方向时不再重复入队，避免把队列占满
+    var last = queue[queue.length - 1];
+    if (last && last.x === d.x && last.y === d.y) return;
+    if (queue.length < 2) queue.push(d);
+  }
+
+  // 启动自动演示定时器（会先清掉旧的，避免重复计时）
+  function startAutoTimer() {
+    stopAutoTimer();
+    autoTimer = window.setInterval(autoTick, AUTO_INTERVAL);
+    autoTick();                                    // 立刻先决策一次，免得开局直冲出去
+  }
+
+  // 停止自动演示定时器
+  function stopAutoTimer() {
+    if (autoTimer !== null) {
+      window.clearInterval(autoTimer);
+      autoTimer = null;
+    }
+  }
+
+  // 打开 / 关闭自动演示
+  function setAuto(on) {
+    AUTO = !!on;
+
+    // 更新按钮外观与无障碍状态
+    autoBtn.classList.toggle('on', AUTO);
+    autoBtn.setAttribute('aria-pressed', AUTO ? 'true' : 'false');
+    autoLabel.textContent = AUTO ? '自动演示：开' : '自动演示：关';
+
+    if (AUTO) {
+      queue = [];                                  // 丢掉此前按键残留的方向
+      // 开启后立刻接管：等待中就直接开局，已结束就重开一局，暂停中则继续
+      if (state === 'ready') {
+        state = 'running';
+        lastTs = 0;
+        acc = 0;
+        show(overlay, false);
+      } else if (state === 'over') {
+        restart();
+      } else if (state === 'paused') {
+        togglePause();
+      }
+      startAutoTimer();
+    } else {
+      stopAutoTimer();                             // 关闭后把控制权交回键盘
+    }
+  }
+
+  // ======================== 启动 ========================
+  // 点击按钮切换自动演示
+  autoBtn.addEventListener('click', function () {
+    setAuto(!AUTO);
+  });
+  reset();                                 // 初始化棋盘与蛇
+  // 重置覆盖层里的按键提示（暂停 / 结束时它会被改写）
+  overlay.querySelector('.hint').innerHTML =
+    '<kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> 移动 · <kbd>空格</kbd> 暂停 / 继续';
+  show(overlay, true);                     // 显示开始提示
+  window.requestAnimationFrame(loop);      // 启动主循环
+})();
+</script>
+</body>
+</html>
