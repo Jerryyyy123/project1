@@ -18,6 +18,14 @@
     点击画布下方的「自动演示」开关即可开启。开启后方向键失效，
     改由代码每隔 100 毫秒计算一次方向，自动把蛇开向食物。
     空格 / 回车 仍然有效，方便随时暂停或重开。
+    关闭开关时会「立即暂停」，按空格即可自己接手继续。
+
+  成绩记录：
+    最高分和累计局数保存在浏览器的 localStorage 里，关掉页面也不会丢。
+    最高分跨局保留，重开新局不会清零；每手动结束一局，局数 +1。
+    点击画布下方的「重置」按钮可以把这两项记录清零。
+    注意：自动演示既不计入最高分，也不计入局数（演示中最高分会变暗提示），
+    只有纯手动玩出来的成绩才会刷新记录。
 
   规则：
     吃到食物 加 1 分，蛇身变长，速度略微提升；
@@ -67,33 +75,39 @@
     border-radius: 12px;
   }
 
-  /* “分数”两个小字标签 */
+  /* 计分板里的每一栏（分数 / 局数 / 最高分） */
+  .hud .stat {
+    text-align: center;
+    min-width: 84px;               /* 三栏等宽，数字变化时不会左右跳动 */
+  }
+
+  /* 每一栏上方的小字标签 */
   .hud .label {
     font-size: 13px;
     letter-spacing: 2px;           /* 字间距拉开一点，更像标签 */
     color: #7d8aa5;                /* 次要文字：暗灰蓝 */
-    text-transform: uppercase;
+    margin-bottom: 2px;
   }
 
-  /* 当前分数的大号数字 */
-  .hud .score {
+  /* 每一栏里的大号数字，统一字号与等宽数字 */
+  .hud .value {
     font-size: 24px;
     font-weight: 700;
-    color: #6ee7a8;                /* 亮绿色，与蛇的颜色呼应 */
     font-variant-numeric: tabular-nums;   /* 等宽数字，跳动时不会左右抖动 */
+    line-height: 1.2;
   }
 
-  /* 右上角的最高分文字 */
-  .hud .best {
-    font-size: 13px;
-    color: #7d8aa5;
-  }
+  /* 当前分数：亮绿色，与蛇的颜色呼应 */
+  .hud .score { color: #6ee7a8; }
 
-  /* 最高分里的数字，用金色突出 */
-  .hud .best span {
-    color: #ffd166;
-    font-weight: 600;
-  }
+  /* 累计局数：蓝色，与另外两栏区分开 */
+  .hud .games { color: #7cc4ff; }
+
+  /* 历史最高分：金色 */
+  .hud .best { color: #ffd166; }
+
+  /* 自动演示进行中：最高分变暗，直观提示这一局的成绩不会被记录 */
+  .hud .value.best.muted { opacity: .35; }
 
   /* ======================== 棋盘舞台 ======================== */
 
@@ -188,6 +202,13 @@
     max-width: 92vw;
   }
 
+  /* 控制条左侧的按钮组：自动演示 + 重置 */
+  .actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
   /* 自动演示开关按钮 */
   .toggle {
     display: inline-flex;
@@ -206,6 +227,12 @@
 
   /* 鼠标悬停时边框稍微提亮 */
   .toggle:hover { border-color: #3a465f; }
+
+  /* 重置按钮悬停时偏红，提示这是「清空记录」的操作 */
+  .toggle.danger:hover {
+    border-color: #7a3140;
+    color: #ff6b81;
+  }
 
   /* 键盘聚焦时给出可见的焦点环 */
   .toggle:focus-visible {
@@ -244,15 +271,23 @@
 </head>
 <body>
 
-  <!-- 顶部计分板：左边是当前分数，右边是历史最高分 -->
+  <!-- 顶部计分板：当前分数 / 累计局数 / 历史最高分 -->
   <div class="hud">
-    <div>
+    <!-- 当前这一局的分数，由脚本实时更新 -->
+    <div class="stat">
       <div class="label">分数</div>
-      <!-- 当前分数，由脚本实时更新 -->
-      <div class="score" id="score">0</div>
+      <div class="value score" id="score">0</div>
     </div>
-    <!-- 最高分保存在 localStorage 中，刷新页面后依然保留 -->
-    <div class="best">最高分 <span id="best">0</span></div>
+    <!-- 累计玩了多少局，每局结束时 +1，保存在 localStorage -->
+    <div class="stat">
+      <div class="label">局数</div>
+      <div class="value games" id="games">0</div>
+    </div>
+    <!-- 历史最高分，保存在 localStorage；重开新局不会清零 -->
+    <div class="stat">
+      <div class="label">最高分</div>
+      <div class="value best" id="best">0</div>
+    </div>
   </div>
 
   <!-- 棋盘舞台：画布 + 覆盖提示层 -->
@@ -268,12 +303,18 @@
     </div>
   </div>
 
-  <!-- 底部控制条：左边是自动演示开关，右边是规则说明 -->
+  <!-- 底部控制条：左边是一组按钮，右边是规则说明 -->
   <div class="bar">
-    <!-- 自动演示开关。点击切换；开启后由代码接管方向选择，方向键将被忽略 -->
-    <button type="button" id="autoBtn" class="toggle" aria-pressed="false">
-      <span class="dot"></span><span id="autoLabel">自动演示：关</span>
-    </button>
+    <div class="actions">
+      <!-- 自动演示开关。点击切换；开启后由代码接管方向选择，方向键将被忽略 -->
+      <button type="button" id="autoBtn" class="toggle" aria-pressed="false">
+        <span class="dot"></span><span id="autoLabel">自动演示：关</span>
+      </button>
+      <!-- 重置记录：把最高分和累计局数清零（不影响当前这一局） -->
+      <button type="button" id="resetBtn" class="toggle danger" title="清空最高分和累计局数">
+        重置
+      </button>
+    </div>
     <span class="foot">吃到食物 +1 分 · 撞墙或撞到自己游戏结束</span>
   </div>
 
@@ -292,16 +333,22 @@
   var SPEED_UP = 4;           // 每吃一个食物，间隔减少的毫秒数
   var AUTO_INTERVAL = 100;    // 自动演示每隔多少毫秒重新决策一次方向
 
+  // ---- localStorage 的键名 ----
+  var BEST_KEY = 'snake.best';     // 历史最高分存在这个键下
+  var GAMES_KEY = 'snake.games';   // 累计局数存在这个键下
+
   // ======================== DOM 元素引用 ========================
   var canvas = document.getElementById('game');      // 画布
   var ctx = canvas.getContext('2d');                 // 2D 绘图上下文
   var scoreEl = document.getElementById('score');    // 当前分数显示区
   var bestEl = document.getElementById('best');      // 最高分显示区
+  var gamesEl = document.getElementById('games');    // 累计局数显示区
   var overlay = document.getElementById('overlay');  // 覆盖提示层
   var ovTitle = document.getElementById('ovTitle');  // 覆盖层标题
   var ovText = document.getElementById('ovText');    // 覆盖层正文
   var autoBtn = document.getElementById('autoBtn');      // 自动演示开关按钮
   var autoLabel = document.getElementById('autoLabel');  // 开关上的文字
+  var resetBtn = document.getElementById('resetBtn');    // 重置记录按钮
 
   // ======================== 画布尺寸适配 ========================
   // 高分屏（devicePixelRatio > 1）下，如果画布内部像素等于 CSS 像素，
@@ -334,29 +381,44 @@
   var stepMs = START_SPEED;   // 当前每步间隔（毫秒），吃得越多越小
   var acc = 0;             // 累积时间，够 stepMs 就走一步
   var lastTs = 0;          // 上一帧的时间戳，用于计算帧间隔
-  var best = loadBest();   // 历史最高分
+  var best = loadNumber(BEST_KEY);      // 历史最高分（跨局保留，不会因为重开而清零）
+  var games = loadNumber(GAMES_KEY);    // 累计已进行的局数
 
   // ---- 自动演示相关状态 ----
   var AUTO = false;        // 是否开启自动演示（开启后方向键失效）
   var autoTimer = null;    // 自动演示的定时器句柄，关闭时需要清掉
+  var autoPlayed = false;  // 当前这一局是否被自动演示碰过（碰过就不计入最高分）
 
-  bestEl.textContent = best;   // 初始化时先把最高分显示出来
+  bestEl.textContent = String(best);      // 初始化时先把最高分显示出来
+  gamesEl.textContent = String(games);    // 以及累计局数
 
   // ======================== 工具函数 ========================
 
-  // 从 localStorage 读取最高分；隐私模式等场景可能抛异常，所以包一层 try
-  function loadBest() {
+  // 从 localStorage 读取一个非负整数。
+  // 首次访问时读不到、浏览器禁用存储时会抛异常，所以包一层 try 兜底。
+  function loadNumber(key) {
     try {
-      var v = window.localStorage.getItem('snake.best');
+      var v = window.localStorage.getItem(key);
       return v ? (parseInt(v, 10) || 0) : 0;
     } catch (e) {
       return 0;
     }
   }
 
-  // 把最高分写回 localStorage，失败时静默忽略
-  function saveBest(v) {
-    try { window.localStorage.setItem('snake.best', String(v)); } catch (e) { /* 忽略 */ }
+  // 把数值写回 localStorage，失败（隐私模式等）时静默忽略
+  function saveNumber(key, v) {
+    try { window.localStorage.setItem(key, String(v)); } catch (e) { /* 忽略 */ }
+  }
+
+  // 「重置」按钮的处理：把最高分和累计局数都清零，并写回 localStorage。
+  // 只清记录，不动当前正在进行的那一局（分数、蛇身都保持原样）。
+  function resetRecords() {
+    best = 0;
+    games = 0;
+    bestEl.textContent = '0';
+    gamesEl.textContent = '0';
+    saveNumber(BEST_KEY, 0);
+    saveNumber(GAMES_KEY, 0);
   }
 
   // 把整局游戏恢复到初始状态（不会自动开始，由调用方决定）
@@ -371,6 +433,9 @@
     dir = { x: 1, y: 0 };     // 初始朝右
     queue = [];               // 清空方向输入队列
     score = 0;                // 分数归零
+    // 这一局算什么性质：自动演示开着就是「演示局」，成绩不计入最高分。
+    // 放在 reset() 里，所以空格重开时会按当前开关状态重新判定。
+    autoPlayed = AUTO;
     stepMs = START_SPEED;     // 速度恢复初始值
     acc = 0;
     lastTs = 0;
@@ -453,10 +518,12 @@
       // ---- 吃到食物 ----
       score += 1;                                  // 吃到食物 +1 分
       scoreEl.textContent = String(score);         // 同步更新顶部显示
-      if (score > best) {                          // 刷新最高分
+      // 只有纯手动玩出来的成绩才刷新最高分。
+      // 自动演示的成绩不算数，否则 AI 能轻易刷出人手打不到的高分。
+      if (!autoPlayed && score > best) {
         best = score;
         bestEl.textContent = String(best);
-        saveBest(best);
+        saveNumber(BEST_KEY, best);
       }
       stepMs = Math.max(MIN_SPEED, stepMs - SPEED_UP);   // 提速，但不低于上限
       placeFood();                                 // 重新放一个食物
@@ -470,9 +537,22 @@
   // 结束游戏。win 为 true 表示铺满棋盘通关
   function gameOver(win) {
     state = 'over';
+
+    // 每结束一局，累计局数 +1 并写回 localStorage。
+    // 自动演示局不计入：那是 AI 玩的，不算玩家自己的战绩（和最高分一致）。
+    // 这里不会重复计数：step() 判定失败后立刻 return，而且 state 一旦变成
+    // 'over'，主循环就不会再调用 step()，所以一局只会走到这里一次。
+    if (!autoPlayed) {
+      games += 1;
+      gamesEl.textContent = String(games);
+      saveNumber(GAMES_KEY, games);
+    }
+
     ovTitle.textContent = win ? '完美通关！' : '游戏结束';
     ovTitle.className = 'title';                   // 去掉 .ready，标题变红
-    ovText.textContent = '本局得分：' + score + ' 分';
+    // 自动演示局补一句说明，免得玩家以为记录没生效
+    ovText.textContent = '本局得分：' + score + ' 分' +
+      (autoPlayed ? '（自动演示，不计入最高分和局数）' : '');
     document.getElementById('overlay').querySelector('.hint').innerHTML =
       '按 <kbd>空格</kbd> 或 <kbd>回车</kbd> 重新开始';
     show(overlay, true);
@@ -929,6 +1009,12 @@
     autoBtn.setAttribute('aria-pressed', AUTO ? 'true' : 'false');
     autoLabel.textContent = AUTO ? '自动演示：开' : '自动演示：关';
 
+    // 只要这一局开过自动演示，就永久标记为「演示局」——即使中途关掉，
+    // 这一局的分数也仍然不算（避免手动接着玩把 AI 刷的分记进最高分）。
+    if (AUTO) autoPlayed = true;
+    // 演示进行中把最高分调暗，直观提示这一局的成绩不会被记录
+    bestEl.classList.toggle('muted', AUTO);
+
     if (AUTO) {
       queue = [];                                  // 丢掉此前按键残留的方向
       // 开启后立刻接管：等待中就直接开局，已结束就重开一局，暂停中则继续
@@ -938,13 +1024,20 @@
         acc = 0;
         show(overlay, false);
       } else if (state === 'over') {
-        restart();
+        restart();                                 // 内部会调 reset()，autoPlayed 会被设成 true
       } else if (state === 'paused') {
         togglePause();
       }
       startAutoTimer();
     } else {
-      stopAutoTimer();                             // 关闭后把控制权交回键盘
+      stopAutoTimer();                             // 先停掉定时器
+      // 关闭自动演示时立即暂停游戏。
+      // 否则 AI 刚交还控制权、蛇仍在按原方向滑行，玩家往往来不及反应就撞墙了。
+      // 暂停后按空格即可自己接手继续。
+      if (state === 'running') {
+        queue = [];                                // 丢掉 AI 队列里还没生效的方向，交接更干净
+        togglePause();
+      }
     }
   }
 
@@ -953,6 +1046,12 @@
   autoBtn.addEventListener('click', function () {
     setAuto(!AUTO);
   });
+
+  // 点击「重置」把最高分和累计局数清零
+  resetBtn.addEventListener('click', function () {
+    resetRecords();
+  });
+
   reset();                                 // 初始化棋盘与蛇
   // 重置覆盖层里的按键提示（暂停 / 结束时它会被改写）
   overlay.querySelector('.hint').innerHTML =
